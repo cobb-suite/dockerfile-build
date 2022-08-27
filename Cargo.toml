@@ -1,0 +1,18 @@
+[package]
+name = "dockertest-dockerfile"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bollard = "0.13"
+flate2 = "1.0.23"
+tar = "0.4.38"
+futures = "0.3.23"
+dockertest = "0.3.1"
+tracing = "0.1.36"
+tokio = "1.20.1"
+
+[dev-dependencies]
+wiremock = "0.5"
