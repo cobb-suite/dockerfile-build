@@ -9,7 +9,7 @@ use tracing::{event, Level};
 use crate::utils::tarball;
 
 #[derive(Error, Debug)]
-pub(crate) enum DockerfileError<'a> {
+pub enum DockerfileError<'a> {
     #[error("Building image via Docker API failed: DockerfileImage: {dockerfile_image}")]
     BuildImage {
         error: String,
@@ -18,13 +18,13 @@ pub(crate) enum DockerfileError<'a> {
 }
 
 #[derive(Debug)]
-pub(crate) struct DockerfileImage {
+pub struct DockerfileImage {
     repository: String,
     tag: String,
     path: String,
     name: String,
     #[cfg(feature = "dockertest")]
-    image: Dockertest::Image
+    image: Dockertest::Image,
 }
 
 impl fmt::Display for DockerfileImage {
@@ -50,7 +50,7 @@ impl DockerfileImage {
             path: path.map_or("./dockerfile".to_string(), |path| path.to_string()),
             name: name.map_or("Dockerfile".to_string(), |name| name.to_string()),
             #[cfg(feature = "dockertest")]
-            image: Dockertest::Image::with_repository(repository)
+            image: Dockertest::Image::with_repository(repository),
         }
     }
 
@@ -60,7 +60,12 @@ impl DockerfileImage {
     }
 
     pub async fn build(&self, client: &Docker) -> Result<(), DockerfileError> {
-        dbg!("building image: {}:{}", &self.repository, &self.tag);
+        event!(
+            Level::INFO,
+            "building image: {}:{}",
+            &self.repository,
+            &self.tag
+        );
         let options = BuildImageOptions::<&str> {
             dockerfile: &self.name,
             t: &format!("{}:{}", &self.repository, &self.tag), // This is the tag we would give the image when building, docker build . -t <name:tag>
@@ -73,8 +78,8 @@ impl DockerfileImage {
         let mut stream = client.build_image(options, None, Some(buf.into()));
         while let Some(result) = stream.next().await {
             match result {
-                Ok(intermitten_result) => match intermitten_result {
-                    BuildInfo {
+                Ok(intermitten_result) => {
+                    let BuildInfo {
                         id,
                         stream: _,
                         error,
@@ -83,26 +88,25 @@ impl DockerfileImage {
                         progress,
                         progress_detail,
                         aux: _,
-                    } => {
-                        if error.is_some() {
-                            event!(
-                                Level::ERROR,
-                                "build error {} {:?}",
-                                error.clone().unwrap(),
-                                error_detail.clone().unwrap()
-                            );
-                        } else {
-                            event!(
-                                Level::TRACE,
-                                "build progress {} {:?} {:?} {:?}",
-                                status.clone().unwrap_or_default(),
-                                id.clone().unwrap_or_default(),
-                                progress.clone().unwrap_or_default(),
-                                progress_detail.clone().unwrap_or_default(),
-                            );
-                        }
-                    }
-                },
+                    } = intermitten_result;
+                    if error.is_some() {
+                        event!(
+                            Level::ERROR,
+                            "build error {} {:?}",
+                            error.clone().unwrap(),
+                            error_detail.clone().unwrap()
+                        );
+                    } else {
+                        event!(
+                            Level::TRACE,
+                            "build progress {} {:?} {:?} {:?}",
+                            status.clone().unwrap_or_default(),
+                            id.clone().unwrap_or_default(),
+                            progress.clone().unwrap_or_default(),
+                            progress_detail.clone().unwrap_or_default(),
+                        );
+                    };
+                }
                 Err(e) => {
                     let msg = e.to_string();
                     return Err(DockerfileError::BuildImage {
@@ -191,5 +195,32 @@ mod tests {
                 && x.1.contains("stable")),
             "failure checking build image request contains tag"
         );
+    }
+
+    #[tokio::test]
+    async fn handle_error() {
+        let mock_server = MockServer::start().await;
+
+        Mock::given(method("POST"))
+            .and(path("/build"))
+            .respond_with(
+                ResponseTemplate::new(400)
+                    .set_body_string(r#"[{"message":"Something went wrong!"}]"#),
+            )
+            .expect(1..)
+            .mount(&mock_server)
+            .await;
+        let client =
+            Docker::connect_with_http(&mock_server.uri(), 4, bollard::API_DEFAULT_VERSION).unwrap();
+
+        let img = DockerfileImage::with_dockerfile(
+            "dockertest-dockerfile/hello",
+            Some("stable"),
+            Some("./dockerfiles/hello.dockerfile"),
+            None,
+        );
+        img.build(&client)
+            .await
+            .expect_err("Expected DockerfileError::BuildImage");
     }
 }
