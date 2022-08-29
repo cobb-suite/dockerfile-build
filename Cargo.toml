@@ -10,9 +10,16 @@ bollard = "0.13"
 flate2 = "1.0.23"
 tar = "0.4.38"
 futures = "0.3.23"
-dockertest = "0.3.1"
 tracing = "0.1.36"
 tokio = "1.20.1"
+thiserror = "1.0.32"
+dockertest = { version = "0.3.1", optional = true }
 
 [dev-dependencies]
 wiremock = "0.5"
+
+[dev-dependencies.tokio]
+features = ["macros"]
+
+[features]
+dockertest = ["dep:dockertest"]

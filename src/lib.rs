@@ -1,16 +1,40 @@
-use std::path::Path;
+mod utils;
+use std::fmt;
 
 use bollard::{image::BuildImageOptions, service::BuildInfo, Docker};
-use dockertest::{DockerTestError};
-use flate2::{write::GzEncoder, Compression};
 use futures::stream::StreamExt;
+use thiserror::Error;
 use tracing::{event, Level};
 
-pub struct DockerfileImage {
+use crate::utils::tarball;
+
+#[derive(Error, Debug)]
+pub(crate) enum DockerfileError<'a> {
+    #[error("Building image via Docker API failed: DockerfileImage: {dockerfile_image}")]
+    BuildImage {
+        error: String,
+        dockerfile_image: &'a DockerfileImage,
+    },
+}
+
+#[derive(Debug)]
+pub(crate) struct DockerfileImage {
     repository: String,
     tag: String,
     path: String,
     name: String,
+    #[cfg(feature = "dockertest")]
+    image: Dockertest::Image
+}
+
+impl fmt::Display for DockerfileImage {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(
+            f,
+            "repository: {}, tag: {}, path: {}, name: {}",
+            self.repository, self.tag, self.path, self.name
+        )
+    }
 }
 
 impl DockerfileImage {
@@ -25,10 +49,17 @@ impl DockerfileImage {
             tag: tag.map_or("latest".to_string(), |tag| tag.to_string()),
             path: path.map_or("./dockerfile".to_string(), |path| path.to_string()),
             name: name.map_or("Dockerfile".to_string(), |name| name.to_string()),
+            #[cfg(feature = "dockertest")]
+            image: Dockertest::Image::with_repository(repository)
         }
     }
 
-    pub async fn build(&self, client: &Docker) -> Result<(), DockerTestError> {
+    #[cfg(feature = "dockertest")]
+    pub(crate) fn image(&self) -> &Dockertest::Image {
+        &self.image
+    }
+
+    pub async fn build(&self, client: &Docker) -> Result<(), DockerfileError> {
         dbg!("building image: {}:{}", &self.repository, &self.tag);
         let options = BuildImageOptions::<&str> {
             dockerfile: &self.name,
@@ -74,10 +105,9 @@ impl DockerfileImage {
                 },
                 Err(e) => {
                     let msg = e.to_string();
-                    return Err(DockerTestError::Pull {
-                        repository: self.repository.to_string(),
-                        tag: self.tag.to_string(),
+                    return Err(DockerfileError::BuildImage {
                         error: msg,
+                        dockerfile_image: self,
                     });
                 }
             }
@@ -86,19 +116,6 @@ impl DockerfileImage {
         event!(Level::DEBUG, "successfully built image");
         Ok(())
     }
-}
-
-fn tarball(path: &str, dockerfile_name: &str) -> Result<Vec<u8>, std::io::Error> {
-    let path = Path::new(path);
-
-    let enc = GzEncoder::new(Vec::new(), Compression::default());
-    let mut tar = tar::Builder::new(enc);
-    if path.is_dir() {
-        tar.append_dir_all("./", path)?;
-    } else {
-        tar.append_path_with_name(path, dockerfile_name)?;
-    }
-    Ok(tar.into_inner().unwrap().finish().unwrap())
 }
 
 #[cfg(test)]
@@ -125,20 +142,23 @@ mod tests {
             "dockertest-dockerfile/hello",
             None,
             Some("./dockerfiles/hello.dockerfile"),
-            None
+            None,
         );
         img.build(&client).await.unwrap();
-     
+
         let received_requests = mock_server.received_requests().await.unwrap();
         let request = received_requests.get(0).unwrap();
         dbg!(request);
         let mut params = request.url.query_pairs();
         assert!(
-                params.any(|x| x.0.eq("t") && x.1.contains("dockertest-dockerfile") && x.1.contains("hello") && x.1.contains("latest")),
-                "failure checking build image request contains tag"
-            );
+            params.any(|x| x.0.eq("t")
+                && x.1.contains("dockertest-dockerfile")
+                && x.1.contains("hello")
+                && x.1.contains("latest")),
+            "failure checking build image request contains tag"
+        );
     }
-    
+
     #[tokio::test]
     async fn it_works_custom_tag() {
         let mock_server = MockServer::start().await;
@@ -156,17 +176,20 @@ mod tests {
             "dockertest-dockerfile/hello",
             Some("stable"),
             Some("./dockerfiles/hello.dockerfile"),
-            None
+            None,
         );
         img.build(&client).await.unwrap();
-     
+
         let received_requests = mock_server.received_requests().await.unwrap();
         let request = received_requests.get(0).unwrap();
         dbg!(request);
         let mut params = request.url.query_pairs();
         assert!(
-                params.any(|x| x.0.eq("t") && x.1.contains("dockertest-dockerfile") && x.1.contains("hello") && x.1.contains("stable")),
-                "failure checking build image request contains tag"
-            );
+            params.any(|x| x.0.eq("t")
+                && x.1.contains("dockertest-dockerfile")
+                && x.1.contains("hello")
+                && x.1.contains("stable")),
+            "failure checking build image request contains tag"
+        );
     }
 }
