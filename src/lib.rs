@@ -17,14 +17,25 @@ pub enum DockerfileError<'a> {
     },
 }
 
-#[derive(Debug)]
 pub struct DockerfileImage {
     repository: String,
     tag: String,
     path: String,
     name: String,
     #[cfg(feature = "dockertest")]
-    image: Dockertest::Image,
+    image: dockertest::Image,
+}
+
+impl std::fmt::Debug for DockerfileImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DockerfileImage")
+            .field("repository", &self.repository)
+            .field("tag", &self.tag)
+            .field("path", &self.path)
+            .field("name", &self.name)
+            .field("image", &self.to_string())
+            .finish()
+    }
 }
 
 impl fmt::Display for DockerfileImage {
@@ -50,12 +61,12 @@ impl DockerfileImage {
             path: path.map_or("./dockerfile".to_string(), |path| path.to_string()),
             name: name.map_or("Dockerfile".to_string(), |name| name.to_string()),
             #[cfg(feature = "dockertest")]
-            image: Dockertest::Image::with_repository(repository),
+            image: dockertest::Image::with_repository(repository),
         }
     }
 
     #[cfg(feature = "dockertest")]
-    pub(crate) fn image(&self) -> &Dockertest::Image {
+    pub(crate) fn image(&self) -> &dockertest::Image {
         &self.image
     }
 
